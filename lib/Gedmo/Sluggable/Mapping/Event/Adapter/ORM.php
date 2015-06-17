@@ -4,6 +4,7 @@ namespace Gedmo\Sluggable\Mapping\Event\Adapter;
 
 use Gedmo\Mapping\Event\Adapter\ORM as BaseAdapterORM;
 use Doctrine\ORM\Query;
+use Doctrine\ORM\Mapping\ClassMetadataInfo;
 use Gedmo\Sluggable\Mapping\Event\SluggableAdapter;
 use Gedmo\Tool\Wrapper\AbstractWrapper;
 
@@ -35,12 +36,24 @@ class ORM extends BaseAdapterORM implements SluggableAdapter
 
         // use the unique_base to restrict the uniqueness check
         if ($config['unique'] && isset($config['unique_base'])) {
-            if (($ubase = $wrapped->getPropertyValue($config['unique_base'])) && !array_key_exists($config['unique_base'], $wrapped->getMetadata()->getAssociationMappings())) {
+            $ubase = $wrapped->getPropertyValue($config['unique_base']);
+            if (array_key_exists($config['unique_base'], $wrapped->getMetadata()->getAssociationMappings())) {
+                $mapping = $wrapped->getMetadata()->getAssociationMapping($config['unique_base']);
+            } else {
+                $mapping = false;
+            }
+            if ($ubase && !$mapping) {
                 $qb->andWhere('rec.'.$config['unique_base'].' = :unique_base');
                 $qb->setParameter(':unique_base', $ubase);
-            } elseif (array_key_exists($config['unique_base'], $wrapped->getMetadata()->getAssociationMappings())) {
-                $associationMappings = $wrapped->getMetadata()->getAssociationMappings();
-                $qb->join($associationMappings[$config['unique_base']]['targetEntity'], 'unique_'.$config['unique_base']);
+            } elseif ($ubase && $mapping && in_array($mapping['type'], array(ClassMetadataInfo::ONE_TO_ONE, ClassMetadataInfo::MANY_TO_ONE))) {
+                $mapped_alias = 'mapped_'.$config['unique_base'];
+                $wrapped_ubase = AbstractWrapper::wrap($ubase, $em);
+                $qb->innerJoin('rec.'.$config['unique_base'], $mapped_alias);
+                foreach (array_keys($mapping['targetToSourceKeyColumns']) as $i => $mapped_key) {
+                  $mapped_prop = $wrapped_ubase->getMetadata()->fieldNames[$mapped_key];
+                  $qb->andWhere($qb->expr()->eq($mapped_alias.'.'.$mapped_prop, ':assoc'.$i));
+                  $qb->setParameter(':assoc'.$i, $wrapped_ubase->getPropertyValue($mapped_prop));
+                }
             } else {
                 $qb->andWhere($qb->expr()->isNull('rec.'.$config['unique_base']));
             }
